@@ -61,10 +61,21 @@ impl Proxy {
     }
 
     async fn process_request(self, req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-        let bind_addr = get_rand_ipv6(self.ipv6, self.prefix_len);
         let mut http = HttpConnector::new();
-        http.set_local_address(Some(bind_addr));
-        println!("{} via {bind_addr}", req.uri().host().unwrap_or_default());
+        let mut bind_addr = None;
+        
+        if let Some(host) = req.uri().host() {
+            if let Ok(addrs) = (host, 0).to_socket_addrs() {
+                let is_ipv6 = addrs.filter(|addr| addr.is_ipv6()).next().is_some();
+                if is_ipv6 {
+                    bind_addr = Some(get_rand_ipv6(self.ipv6, self.prefix_len));
+                    http.set_local_address(bind_addr);
+                }
+            }
+        }
+        
+        println!("{} via {}", req.uri().host().unwrap_or_default(), 
+                bind_addr.map(|a| a.to_string()).unwrap_or_else(|| "direct".to_string()));
 
         let client = Client::builder()
             .http1_title_case_headers(true)
@@ -79,15 +90,28 @@ impl Proxy {
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
         if let Ok(addrs) = addr_str.to_socket_addrs() {
+            let addrs: Vec<_> = addrs.collect();
+            let is_ipv6 = addrs.iter().any(|addr| addr.is_ipv6());
+
             for addr in addrs {
-                let socket = TcpSocket::new_v6()?;
-                let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
-                if socket.bind(bind_addr).is_ok() {
-                    println!("{addr_str} via {bind_addr}");
-                    if let Ok(mut server) = socket.connect(addr).await {
-                        tokio::io::copy_bidirectional(upgraded, &mut server).await?;
-                        return Ok(());
+                let socket = if is_ipv6 {
+                    let socket = TcpSocket::new_v6()?;
+                    let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
+                    if socket.bind(bind_addr).is_ok() {
+                        println!("{addr_str} via {bind_addr}");
+                        socket
+                    } else {
+                        continue;
                     }
+                } else {
+                    let socket = TcpSocket::new_v4()?;
+                    println!("{addr_str} via direct IPv4");
+                    socket
+                };
+
+                if let Ok(mut server) = socket.connect(addr).await {
+                    tokio::io::copy_bidirectional(upgraded, &mut server).await?;
+                    return Ok(());
                 }
             }
         } else {
