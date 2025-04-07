@@ -73,9 +73,6 @@ impl Proxy {
                 }
             }
         }
-        
-        println!("{} via {}", req.uri().host().unwrap_or_default(), 
-                bind_addr.map(|a| a.to_string()).unwrap_or_else(|| "direct".to_string()));
 
         let client = Client::builder()
             .http1_title_case_headers(true)
@@ -98,14 +95,12 @@ impl Proxy {
                     let socket = TcpSocket::new_v6()?;
                     let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
                     if socket.bind(bind_addr).is_ok() {
-                        println!("{addr_str} via {bind_addr}");
                         socket
                     } else {
                         continue;
                     }
                 } else {
                     let socket = TcpSocket::new_v4()?;
-                    println!("{addr_str} via direct IPv4");
                     socket
                 };
 
