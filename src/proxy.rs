@@ -1,15 +1,15 @@
 use hyper::{
+    Body, Client, Method, Request, Response, Server,
     client::HttpConnector,
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
-    Body, Client, Method, Request, Response, Server,
 };
 use rand::Rng;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpSocket,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 pub async fn start_proxy(
@@ -63,7 +63,7 @@ impl Proxy {
 
     async fn process_request(self, req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
         let mut http = HttpConnector::new();
-        
+
         if let Some(host) = req.uri().host() {
             if let Ok(addrs) = (host, 0).to_socket_addrs() {
                 let has_ipv6 = addrs.filter(|addr| addr.is_ipv6()).next().is_some();
@@ -88,11 +88,11 @@ impl Proxy {
     {
         if let Ok(addrs) = addr_str.to_socket_addrs() {
             let addrs: Vec<_> = addrs.collect();
-            
+
             if let Some(ipv6_addr) = addrs.iter().find(|addr| addr.is_ipv6()) {
                 let socket = TcpSocket::new_v6()?;
                 let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
-                
+
                 if socket.bind(bind_addr).is_ok() {
                     match timeout(Duration::from_millis(300), socket.connect(*ipv6_addr)).await {
                         Ok(Ok(mut server)) => {
@@ -100,7 +100,10 @@ impl Proxy {
                             return Ok(());
                         }
                         _ => {
-                            println!("IPv6 connection failed or timed out for {}, falling back to IPv4", addr_str);
+                            println!(
+                                "IPv6 connection failed or timed out for {}, falling back to IPv4",
+                                addr_str
+                            );
                         }
                     }
                 }
@@ -113,7 +116,7 @@ impl Proxy {
                     return Ok(());
                 }
             }
-            
+
             println!("All connection attempts failed for {}", addr_str);
         } else {
             println!("Failed to resolve address: {}", addr_str);
