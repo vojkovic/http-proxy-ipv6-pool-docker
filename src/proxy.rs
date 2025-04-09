@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpSocket,
+    time::{timeout, Duration},
 };
 
 pub async fn start_proxy(
@@ -62,14 +63,13 @@ impl Proxy {
 
     async fn process_request(self, req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
         let mut http = HttpConnector::new();
-        let mut bind_addr = None;
         
         if let Some(host) = req.uri().host() {
             if let Ok(addrs) = (host, 0).to_socket_addrs() {
-                let is_ipv6 = addrs.filter(|addr| addr.is_ipv6()).next().is_some();
-                if is_ipv6 {
-                    bind_addr = Some(get_rand_ipv6(self.ipv6, self.prefix_len));
-                    http.set_local_address(bind_addr);
+                let has_ipv6 = addrs.filter(|addr| addr.is_ipv6()).next().is_some();
+                if has_ipv6 {
+                    let bind_addr = get_rand_ipv6(self.ipv6, self.prefix_len);
+                    http.set_local_address(Some(bind_addr));
                 }
             }
         }
@@ -88,29 +88,35 @@ impl Proxy {
     {
         if let Ok(addrs) = addr_str.to_socket_addrs() {
             let addrs: Vec<_> = addrs.collect();
-            let is_ipv6 = addrs.iter().any(|addr| addr.is_ipv6());
-
-            for addr in addrs {
-                let socket = if is_ipv6 {
-                    let socket = TcpSocket::new_v6()?;
-                    let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
-                    if socket.bind(bind_addr).is_ok() {
-                        socket
-                    } else {
-                        continue;
+            
+            if let Some(ipv6_addr) = addrs.iter().find(|addr| addr.is_ipv6()) {
+                let socket = TcpSocket::new_v6()?;
+                let bind_addr = get_rand_ipv6_socket_addr(self.ipv6, self.prefix_len);
+                
+                if socket.bind(bind_addr).is_ok() {
+                    match timeout(Duration::from_millis(300), socket.connect(*ipv6_addr)).await {
+                        Ok(Ok(mut server)) => {
+                            let _ = tokio::io::copy_bidirectional(upgraded, &mut server).await?;
+                            return Ok(());
+                        }
+                        _ => {
+                            println!("IPv6 connection failed or timed out for {}, falling back to IPv4", addr_str);
+                        }
                     }
-                } else {
-                    let socket = TcpSocket::new_v4()?;
-                    socket
-                };
+                }
+            }
 
-                if let Ok(mut server) = socket.connect(addr).await {
-                    tokio::io::copy_bidirectional(upgraded, &mut server).await?;
+            if let Some(ipv4_addr) = addrs.iter().find(|addr| addr.is_ipv4()) {
+                let socket = TcpSocket::new_v4()?;
+                if let Ok(mut server) = socket.connect(*ipv4_addr).await {
+                    let _ = tokio::io::copy_bidirectional(upgraded, &mut server).await?;
                     return Ok(());
                 }
             }
+            
+            println!("All connection attempts failed for {}", addr_str);
         } else {
-            println!("error: {addr_str}");
+            println!("Failed to resolve address: {}", addr_str);
         }
 
         Ok(())
