@@ -8,6 +8,11 @@ Assuming you already have an entire IPv6 subnet routed to your server. If your p
 
 Get your IPv6 subnet prefix, for me it is `2a14:7c0:4b20:3b84::/64`
 
+If you don't already have the range routed, you need to first do:
+```
+ip -6 route add local 2a14:7c0:4b20:3b84::/64 dev ens0
+```
+
 Open `ip_nonlocal_bind` for binding any IP address:
 
 ```sh
